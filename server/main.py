@@ -121,6 +121,18 @@ class CreatePurchaseOrderRequest(BaseModel):
     expected_delivery_date: str
     notes: Optional[str] = None
 
+class Task(BaseModel):
+    id: str
+    title: str
+    priority: str
+    dueDate: str
+    status: str
+
+class CreateTaskRequest(BaseModel):
+    title: str
+    priority: str
+    dueDate: str
+
 class RestockOrderItem(BaseModel):
     sku: str
     name: str
@@ -349,6 +361,68 @@ def create_restock_order(request: RestockOrderRequest):
 
     orders.append(new_order)
     return new_order
+
+
+# In-memory tasks store (resets on server restart, consistent with other mock data)
+_tasks: list = []
+_task_id_counter = 100  # Start high to avoid collisions with client mock task IDs
+
+
+@app.get("/api/tasks", response_model=List[Task])
+def get_tasks():
+    return _tasks
+
+
+@app.post("/api/tasks", response_model=Task, status_code=201)
+def create_task(request: CreateTaskRequest):
+    global _task_id_counter
+    _task_id_counter += 1
+    task = {
+        "id": str(_task_id_counter),
+        "title": request.title,
+        "priority": request.priority,
+        "dueDate": request.dueDate,
+        "status": "pending",
+    }
+    _tasks.append(task)
+    return task
+
+
+@app.delete("/api/tasks/{task_id}", status_code=200)
+def delete_task(task_id: str):
+    global _tasks
+    task = next((t for t in _tasks if t["id"] == task_id), None)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    _tasks = [t for t in _tasks if t["id"] != task_id]
+    return {"deleted": task_id}
+
+
+@app.patch("/api/tasks/{task_id}", response_model=Task)
+def toggle_task(task_id: str):
+    task = next((t for t in _tasks if t["id"] == task_id), None)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    task["status"] = "completed" if task["status"] == "pending" else "pending"
+    return task
+
+
+@app.post("/api/purchase-orders", response_model=PurchaseOrder, status_code=201)
+def create_purchase_order(request: CreatePurchaseOrderRequest):
+    now = datetime.utcnow()
+    new_po = {
+        "id": f"PO-{now.strftime('%Y%m%d%H%M%S')}-{len(purchase_orders) + 1}",
+        "backlog_item_id": request.backlog_item_id,
+        "supplier_name": request.supplier_name,
+        "quantity": request.quantity,
+        "unit_cost": request.unit_cost,
+        "expected_delivery_date": request.expected_delivery_date,
+        "status": "Pending",
+        "created_date": now.isoformat(),
+        "notes": request.notes,
+    }
+    purchase_orders.append(new_po)
+    return new_po
 
 
 if __name__ == "__main__":
